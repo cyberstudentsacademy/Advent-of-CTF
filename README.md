@@ -1,6 +1,6 @@
 # CyberStudents’ Advent of CTF Write-Ups
 
-Advent of CTF is a yearly CTF competition organized by CyberStudents, an online organization and community focused on
+Advent of CTF is an annual CTF competition organized by CyberStudents, an online organization and community focused on
 cybersecurity education. Each competition features beginner-oriented challenges that are released daily in December
 leading up to Christmas. Advent of CTF premiered in 2024 and is expected to continue annually with new challenges for
 the foreseeable future.
@@ -34,7 +34,7 @@ also provide clarifications, intended solutions, and additional hints in these c
 | 7   | [Apple Fanatic](/2024/Day%2007%20-%20Apple%20Fanatic/README.md)                   | Web exploitation    | 60     | GodderE2D        | dharneesh5555   |
 | 8   | [vuln research](/2024/Day%2008%20-%20vuln%20research/README.md)                   | OSINT               | 45     | Vip3r            | dharneesh5555   |
 | 9   | [resa?](/2024/Day%2009%20-%20resa/README.md)                                      | Cryptography        | 80     | Vip3r            | zarnex          |
-| 10  | [flag from wish](/2024/Day%2010%20-%20flag%20from%20wish/README.md)               | Binary exploitation | 90     | kolmus           | zarnex          |
+| 10  | [flag from wish](/2024/Day%2010%20-%20flag%20from%20wish/README.md)               | Binary exploitation | 90     | Kolmus           | zarnex          |
 | 11  | [Festive Encoding](/2024/Day%2011%20-%20Festive%20Encoding/README.md)             | Cryptography        | 55     | GodderE2D        | dharneesh5555   |
 | 12  | [Letter To Santa](/2024/Day%2012%20-%20Letter%20To%20Santa/README.md)             | Forensics           | 85     | Logix            | zarnex          |
 | 13  | [Disoriented Santa](/2024/Day%2013%20-%20Disoriented%20Santa/README.md)           | OSINT               | 100    | GodderE2D        | dharneesh5555   |
