@@ -28,17 +28,10 @@ if you wish to brute-force, please limit your wordlists or attack scope._
 ## Hints
 
 **Hint 1:**  
-Taking a look at `init-db.js`, it appears that the “admin” user creates a form that has the flag as the name. Are there
-any attack vectors to getting the name of this form?
-
-Take a look at your browser’s DevTools (particularly the Sources, Network, and Application tabs) and try to compare
-requests with responses from the API in the two `server.js` files. Do you notice anything insecure that can be
-exploited?
+User input should never be trusted, especially not for authentication! As always, check out your browser’s DevTools (particularly the Elements, Sources, and Network tabs).
 
 **Hint 2:**  
-Running the Docker container locally or running the two servers manually may be helpful.
-
-What does `POST /forms/test` do? What does the `csrf` function check for? How can those be possible exploited?
+JSON is all powerful; there’s more to it than strings. There’s also an “employee login” page. Humans don’t always have the best memory and might re-use stuff.
 
 ## Write-up
 
